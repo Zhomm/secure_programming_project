@@ -1,0 +1,16 @@
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+
+
+# Testing
+.pytest_cache/
+
+
+# Project runtime data
+.sfm/
+
+# editor
+.vscode/
