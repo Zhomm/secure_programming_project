@@ -11,6 +11,7 @@ __pycache__/
 
 # Project runtime data
 .sfm/
+*.egg-info/
 
 # editor
 .vscode/
