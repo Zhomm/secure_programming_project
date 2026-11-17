@@ -5,9 +5,11 @@ import json
 import os
 import secrets
 import stat
+import re
 
 from . import crypto, storage, validation
 
+BLOB_NAME_RE = re.compile(r"[0-9a-f]{32}\.bin")
 
 class VaultError(Exception):
     """Generic vault failure (no internal details in the message)."""
@@ -24,6 +26,11 @@ def _blob_aad(username: str, file_id: int) -> bytes:
 def _dek_aad(username: str, file_id: int) -> bytes:
     return f"sfm-dek|{username}|{file_id}".encode()
 
+def _blob_path(username: str, record: dict):
+    name = record.get("blob", "")
+    if not BLOB_NAME_RE.fullmatch(name):
+        raise VaultError("cannot read vault")
+    return storage.get_blobs_dir(username) / name
 
 def _load_index(username: str, kek: bytes) -> list[dict]:
     blob = storage.read_index_blob(username)
@@ -99,11 +106,12 @@ def decrypt_file(username: str, kek: bytes, file_id: int,
                    if r["id"] == file_id), None)
     if record is None:
         raise VaultError("file not found")
-
+    
+    blob_path = _blob_path(username, record)
     try:
         wrapped_dek = base64.b64decode(record["dek"])
         dek = crypto.decrypt_bytes(kek, wrapped_dek, _dek_aad(username, file_id))
-        blob = (storage.get_blobs_dir(username) / record["blob"]).read_bytes()
+        blob = blob_path.read_bytes()
         plaintext = crypto.decrypt_bytes(dek, blob, _blob_aad(username, file_id))
     except (crypto.DecryptionError, OSError):
         raise VaultError("cannot decrypt file")
@@ -118,3 +126,19 @@ def decrypt_file(username: str, kek: bytes, file_id: int,
             os.fsync(f.fileno())
     except OSError:
         raise VaultError("cannot write destination")
+
+def delete_file(username: str, kek: bytes, file_id: int) -> None:
+    records = _load_index(username, kek)
+    record = next((r for r in records if r["id"] == file_id), None)
+    if record is None:
+        raise VaultError("file not found")
+    blob_path = _blob_path(username, record)
+
+    _save_index(username, kek, [r for r in records if r["id"] != file_id])
+
+    try:
+        storage.secure_delete(blob_path)
+    except FileNotFoundError:
+        pass                                  
+    except OSError:
+        raise VaultError("cannot erase file data")

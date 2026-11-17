@@ -55,6 +55,11 @@ def cmd_list(args) -> int:
         print(f"{file_id:>4}  {name}")
     return 0
 
+def cmd_delete(args) -> int:
+    username, kek = _login(args)
+    vault.delete_file(username, kek, args.id)
+    print("Deleted.")
+    return 0
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -81,6 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("list", help="list your files")
     p.set_defaults(func=cmd_list)
+    
+    p = sub.add_parser("delete", help="securely delete a file from the vault")
+    p.add_argument("id", type=int, help="file ID (see 'list')")
+    p.set_defaults(func=cmd_delete)
 
     return parser
 
