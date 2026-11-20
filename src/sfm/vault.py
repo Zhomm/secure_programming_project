@@ -75,12 +75,14 @@ def encrypt_file(username: str, kek: bytes, raw_path: str) -> int:
 
     blob_name = secrets.token_hex(16) + ".bin"
     blob_path = storage.get_blobs_dir(username) / blob_name
+    
     try:
         fd = os.open(blob_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(blob)
-            f.flush()
-            os.fsync(f.fileno())
+        try:
+            _write_fd(fd, blob)
+        except BaseException:
+            blob_path.unlink(missing_ok=True)  
+            raise
     except OSError:
         raise VaultError("cannot write to vault")
 
@@ -97,6 +99,34 @@ def encrypt_file(username: str, kek: bytes, raw_path: str) -> int:
 def list_files(username: str, kek: bytes) -> list[tuple[int, str]]:
     return [(r["id"], r["name"]) for r in _load_index(username, kek)]
 
+def _write_fd(fd: int, data: bytes) -> None:
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _write_output(dest, data: bytes, force: bool) -> None:
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if not force:
+        fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
+        try:
+            _write_fd(fd, data)
+        except BaseException:
+            dest.unlink(missing_ok=True)
+            raise
+        return
+
+    if os.path.lexists(dest):
+        os.close(os.open(dest, os.O_WRONLY | nofollow))
+    tmp = dest.with_name(f".sfm-{secrets.token_hex(8)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
+    try:
+        _write_fd(fd, data)
+        os.replace(tmp, dest)              
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 def decrypt_file(username: str, kek: bytes, file_id: int,
                  raw_dest: str, force: bool = False) -> None:
@@ -115,15 +145,9 @@ def decrypt_file(username: str, kek: bytes, file_id: int,
         plaintext = crypto.decrypt_bytes(dek, blob, _blob_aad(username, file_id))
     except (crypto.DecryptionError, OSError):
         raise VaultError("cannot decrypt file")
-
-    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-    flags |= os.O_TRUNC if force else os.O_EXCL
+    
     try:
-        fd = os.open(dest, flags, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(plaintext)
-            f.flush()
-            os.fsync(f.fileno())
+        _write_output(dest, plaintext, force)
     except OSError:
         raise VaultError("cannot write destination")
 

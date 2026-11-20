@@ -3,6 +3,7 @@
 import argparse
 import getpass
 import sys
+import signal
 
 from . import auth, validation, vault
 
@@ -61,6 +62,9 @@ def cmd_delete(args) -> int:
     print("Deleted.")
     return 0
 
+def _on_terminate(signum, frame):
+    sys.exit(128 + signum)
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sfm", description="Secure File Manager: encrypted per-user vault."
@@ -95,6 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _on_terminate)
+
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command != "register" and not args.user:

@@ -69,12 +69,17 @@ def read_index_blob(username: str) -> bytes | None:
 def write_index_blob(username: str, data: bytes) -> None:
     index_path = get_index_path(username)
     tmp_path = index_path.with_suffix(".tmp")
-    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, index_path)
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                 | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, index_path)
+    except BaseException:           # Ctrl+C clean up
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 CHUNK_SIZE = 1024 * 1024
 
