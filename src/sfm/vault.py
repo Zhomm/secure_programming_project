@@ -7,7 +7,7 @@ import secrets
 import stat
 import re
 
-from . import crypto, storage, validation
+from . import crypto, log, storage, validation
 
 BLOB_NAME_RE = re.compile(r"[0-9a-f]{32}\.bin")
 
@@ -93,11 +93,14 @@ def encrypt_file(username: str, kek: bytes, raw_path: str) -> int:
         "dek": base64.b64encode(wrapped_dek).decode(),
     })
     _save_index(username, kek, records)
+    log.event("encrypt_ok", user=username, file_id=file_id, size=len(plaintext))
     return file_id
 
 
 def list_files(username: str, kek: bytes) -> list[tuple[int, str]]:
-    return [(r["id"], r["name"]) for r in _load_index(username, kek)]
+    files = [(r["id"], r["name"]) for r in _load_index(username, kek)]
+    log.event("list_ok", user=username, count=len(files))
+    return files
 
 def _write_fd(fd: int, data: bytes) -> None:
     with os.fdopen(fd, "wb") as f:
@@ -150,6 +153,7 @@ def decrypt_file(username: str, kek: bytes, file_id: int,
         _write_output(dest, plaintext, force)
     except OSError:
         raise VaultError("cannot write destination")
+    log.event("decrypt_ok", user=username, file_id=file_id, size=len(plaintext))
 
 def delete_file(username: str, kek: bytes, file_id: int) -> None:
     records = _load_index(username, kek)
@@ -166,3 +170,5 @@ def delete_file(username: str, kek: bytes, file_id: int) -> None:
         pass                                  
     except OSError:
         raise VaultError("cannot erase file data")
+
+    log.event("delete_ok", user=username, file_id=file_id)

@@ -5,7 +5,7 @@ import getpass
 import sys
 import signal
 
-from . import auth, validation, vault
+from . import auth, log, validation, vault
 
 
 def _ask_password(confirm: bool = False) -> str:
@@ -107,18 +107,25 @@ def main(argv=None) -> int:
     if args.command != "register" and not args.user:
         parser.error("--user is required for this command")
 
+    command = args.command
     try:
         return args.func(args)
     except (validation.ValidationError, auth.AuthError, vault.VaultError) as e:
+        log.event("command_failed", level="warning", command=command,
+                  error=type(e).__name__, reason=str(e))
         print(f"Error: {e}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
+        log.event("aborted", level="warning", command=command, signal=int(signal.SIGINT))
         print("\nAborted.", file=sys.stderr)
         return 130
-    except Exception:
+    except SystemExit as e:                  
+        log.event("terminated", level="warning", command=command, code=e.code)
+        raise
+    except Exception as e:
+        log.event("internal_error", level="error", command=command, error=type(e).__name__)
         print("Error: internal error", file=sys.stderr)
         return 2
-
 
 if __name__ == "__main__":
     sys.exit(main())

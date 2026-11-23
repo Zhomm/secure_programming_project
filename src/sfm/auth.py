@@ -1,13 +1,13 @@
-""" auth.py handles tha user authentication (login and register) using argon2id with salt for a secure password storage """
+""" auth.py handles the user authentication (login and register) using argon2id with salt for a secure password storage """
 
 import sqlite3
 import hmac
-
+import os
 from argon2.low_level import Type, hash_secret_raw
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 
-from . import storage
+from . import log, storage
 
 SALT_SIZE = 16    
 ROOT_KEY_SIZE = 32
@@ -16,7 +16,7 @@ ROOT_KEY_SIZE = 32
 ARGON2_TIME_COST = 4
 ARGON2_MEMORY_COST = 262144   # 256 MiB
 ARGON2_PARALLELISM = 4
-#with this parameters I achieve around 0.3s 
+#with these parameters I achieve around 0.3s 
 
 class AuthError(Exception):
     """Raised on registration or login failure (generic)."""
@@ -44,7 +44,7 @@ def register(username: str, password: str) -> None:
     storage.init_users_db()
     db_path = storage.get_users_db_path()
 
-    salt = storage.os.urandom(SALT_SIZE)
+    salt = os.urandom(SALT_SIZE)
     root_key = _derive_root_key(password, salt)
     verifier = _derive(root_key, info=b"sfm-auth-verifier")
 
@@ -57,11 +57,13 @@ def register(username: str, password: str) -> None:
             )
             conn.commit()
         except sqlite3.IntegrityError:
+            log.event("register_failed", level="warning", user=username, reason="exists")
             raise AuthError("registration failed")  # generic
     finally:
         conn.close()
 
     storage.get_user_dir(username)
+    log.event("register_ok", user=username)
 
 #retrieve verifier (if user exists)
 def login(username: str, password: str) -> bytes:
@@ -77,6 +79,7 @@ def login(username: str, password: str) -> bytes:
         conn.close()
 
     if row is None:
+        log.event("login_failed", level="warning", user=username, reason="unknown_user")
         raise AuthError("invalid username or password") 
 
     salt, stored_verifier = row
@@ -84,7 +87,9 @@ def login(username: str, password: str) -> bytes:
     computed_verifier = _derive(root_key, info=b"sfm-auth-verifier")
 
     if not hmac.compare_digest(computed_verifier, stored_verifier):
+        log.event("login_failed", level="warning", user=username, reason="bad_password")
         raise AuthError("invalid username or password")
 
     kek = _derive(root_key, info=b"sfm-index-kek")
+    log.event("login_ok", user=username)
     return kek
