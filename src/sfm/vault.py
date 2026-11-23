@@ -14,6 +14,13 @@ BLOB_NAME_RE = re.compile(r"[0-9a-f]{32}\.bin")
 class VaultError(Exception):
     """Generic vault failure (no internal details in the message)."""
 
+def _require_access(username: str) -> None:
+    validation.validate_username(username)
+    try:
+        storage.check_user_access(username)
+    except storage.AccessError as e:
+        log.event("access_denied", level="warning", user=username, reason=str(e))
+        raise VaultError("access denied")
 
 def _index_aad(username: str) -> bytes:
     return f"sfm-index|{username}".encode()
@@ -30,7 +37,12 @@ def _blob_path(username: str, record: dict):
     name = record.get("blob", "")
     if not BLOB_NAME_RE.fullmatch(name):
         raise VaultError("cannot read vault")
-    return storage.get_blobs_dir(username) / name
+    blobs_dir = storage.get_blobs_dir(username)
+    path = blobs_dir / name
+    if os.path.dirname(os.path.realpath(path)) != os.path.realpath(blobs_dir):
+        log.event("access_denied", level="warning", user=username, reason="blob outside vault")
+        raise VaultError("access denied")
+    return path
 
 def _load_index(username: str, kek: bytes) -> list[dict]:
     blob = storage.read_index_blob(username)
@@ -60,6 +72,7 @@ def _read_source(path) -> bytes:
 
 
 def encrypt_file(username: str, kek: bytes, raw_path: str) -> int:
+    _require_access(username)
     src = validation.validate_source_path(raw_path)
     try:
         plaintext = _read_source(src)
@@ -98,6 +111,7 @@ def encrypt_file(username: str, kek: bytes, raw_path: str) -> int:
 
 
 def list_files(username: str, kek: bytes) -> list[tuple[int, str]]:
+    _require_access(username)
     files = [(r["id"], r["name"]) for r in _load_index(username, kek)]
     log.event("list_ok", user=username, count=len(files))
     return files
@@ -133,6 +147,7 @@ def _write_output(dest, data: bytes, force: bool) -> None:
 
 def decrypt_file(username: str, kek: bytes, file_id: int,
                  raw_dest: str, force: bool = False) -> None:
+    _require_access(username)
     dest = validation.validate_dest_path(raw_dest, force)
 
     record = next((r for r in _load_index(username, kek)
@@ -156,6 +171,7 @@ def decrypt_file(username: str, kek: bytes, file_id: int,
     log.event("decrypt_ok", user=username, file_id=file_id, size=len(plaintext))
 
 def delete_file(username: str, kek: bytes, file_id: int) -> None:
+    _require_access(username)
     records = _load_index(username, kek)
     record = next((r for r in records if r["id"] == file_id), None)
     if record is None:

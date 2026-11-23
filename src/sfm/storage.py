@@ -41,6 +41,33 @@ def init_users_db() -> None:
         conn.close()
     os.chmod(db_path, 0o600)
 
+class AccessError(Exception):
+    """Custom error"""
+
+
+def _check_private(path: Path, want_dir: bool) -> None:
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(st.st_mode):
+        raise AccessError("symlink")
+    if want_dir != stat.S_ISDIR(st.st_mode):
+        raise AccessError("wrong type")
+    if st.st_uid != os.getuid():
+        raise AccessError("wrong owner")
+    if st.st_mode & 0o077:
+        raise AccessError("permissions too open")
+
+
+def check_user_access(username: str) -> None:
+    user_dir = get_base_dir() / "vault" / username
+    _check_private(get_base_dir(), True)
+    _check_private(get_base_dir() / "vault", True)
+    _check_private(user_dir, True)
+    _check_private(user_dir / "blobs", True)
+    _check_private(user_dir / "index.enc", False)
+
 #return/create a directory in ~/.sfm/vault/<username> with 700 permission
 def get_user_dir(username: str) -> Path:
     base = ensure_base_dir()
