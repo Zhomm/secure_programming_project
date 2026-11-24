@@ -4,50 +4,71 @@ import argparse
 import getpass
 import sys
 import signal
+import contextlib
 
-from . import auth, log, validation, vault
-
-
-def _ask_password(confirm: bool = False) -> str:
-    password = getpass.getpass("Password: ")
-    if confirm and password != getpass.getpass("Repeat password: "):
-        raise validation.ValidationError("passwords do not match")
-    return password
+from . import auth, log, secmem, validation, vault
 
 
-def _login(args) -> tuple[str, bytes]:
+def _ask_password(confirm: bool = False) -> bytearray:
+    first = secmem.read_password("Password: ")
+    if not confirm:
+        return first
+    second = bytearray()
+    try:
+        second = secmem.read_password("Repeat password: ")
+        if first != second:
+            raise validation.ValidationError("passwords do not match")
+        return first
+    except BaseException:
+        secmem.wipe(first)
+        raise
+    finally:
+        secmem.wipe(second)
+
+
+@contextlib.contextmanager
+def _session(args):
     username = validation.validate_username(args.user)
-    password = validation.validate_password(_ask_password())
-    return username, auth.login(username, password)
+    password = _ask_password()
+    try:
+        validation.validate_password(password)
+        kek = auth.login(username, password)
+    finally:
+        secmem.wipe(password)
+    try:
+        yield username, kek
+    finally:
+        secmem.wipe(kek)
 
 
 def cmd_register(args) -> int:
     username = validation.validate_username(args.username)
-    password = validation.validate_password(
-        _ask_password(confirm=True), check_strength=True
-    )
-    auth.register(username, password)
+    password = _ask_password(confirm=True)
+    try:
+        validation.validate_password(password, check_strength=True)
+        auth.register(username, password)
+    finally:
+        secmem.wipe(password)
     print(f"User '{username}' created.")
     return 0
 
-
 def cmd_encrypt(args) -> int:
-    username, kek = _login(args)
-    file_id = vault.encrypt_file(username, kek, args.path)
+    with _session(args) as (username, kek):
+        file_id = vault.encrypt_file(username, kek, args.path)
     print(f"Encrypted. File ID: {file_id}")
     return 0
 
 
 def cmd_decrypt(args) -> int:
-    username, kek = _login(args)
-    vault.decrypt_file(username, kek, args.id, args.output, args.force)
+    with _session(args) as (username, kek):
+        vault.decrypt_file(username, kek, args.id, args.output, args.force)
     print("Decrypted.")
     return 0
 
 
 def cmd_list(args) -> int:
-    username, kek = _login(args)
-    files = vault.list_files(username, kek)
+    with _session(args) as (username, kek):
+        files = vault.list_files(username, kek)
     if not files:
         print("No files in the vault.")
         return 0
@@ -57,9 +78,9 @@ def cmd_list(args) -> int:
     return 0
 
 def cmd_delete(args) -> int:
-    username, kek = _login(args)
-    vault.delete_file(username, kek, args.id)
-    print("Deleted.")
+    with _session(args) as (username, kek):
+        vault.delete_file(username, kek, args.id)
+        print("Deleted.")
     return 0
 
 def _on_terminate(signum, frame):
@@ -99,6 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    secmem.harden_process()
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, _on_terminate)
 
@@ -115,17 +137,17 @@ def main(argv=None) -> int:
                   error=type(e).__name__, reason=str(e))
         print(f"Error: {e}", file=sys.stderr)
         return 1
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):        # Ctrl+C, or Ctrl+D at the password prompt
         log.event("aborted", level="warning", command=command, signal=int(signal.SIGINT))
         print("\nAborted.", file=sys.stderr)
         return 130
-    except SystemExit as e:                  
+    except SystemExit as e:
         log.event("terminated", level="warning", command=command, code=e.code)
         raise
     except Exception as e:
         log.event("internal_error", level="error", command=command, error=type(e).__name__)
         print("Error: internal error", file=sys.stderr)
         return 2
-
+    
 if __name__ == "__main__":
     sys.exit(main())

@@ -21,10 +21,15 @@ ARGON2_PARALLELISM = 4
 class AuthError(Exception):
     """Raised on registration or login failure (generic)."""
 
+def _secret_bytes(password) -> bytes:
+    if isinstance(password, str):
+        return password.encode("utf-8")
+    return bytes(password)
+
 #used to derive the root key, using a salt
 def _derive_root_key(password: str, salt: bytes) -> bytes:
     return hash_secret_raw(
-        secret=password.encode("utf-8"),
+        secret=_secret_bytes(password),
         salt=salt,
         time_cost=ARGON2_TIME_COST,
         memory_cost=ARGON2_MEMORY_COST,
@@ -66,7 +71,7 @@ def register(username: str, password: str) -> None:
     log.event("register_ok", user=username)
 
 #retrieve verifier (if user exists)
-def login(username: str, password: str) -> bytes:
+def login(username: str, password: str) -> bytearray:
     storage.init_users_db()
     db_path = storage.get_users_db_path()
     conn = sqlite3.connect(db_path)
@@ -89,7 +94,7 @@ def login(username: str, password: str) -> bytes:
     if not hmac.compare_digest(computed_verifier, stored_verifier):
         log.event("login_failed", level="warning", user=username, reason="bad_password")
         raise AuthError("invalid username or password")
-
-    kek = _derive(root_key, info=b"sfm-index-kek")
+    
+    kek = bytearray(_derive(root_key, info=b"sfm-index-kek"))
     log.event("login_ok", user=username)
     return kek

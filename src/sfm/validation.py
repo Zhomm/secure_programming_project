@@ -34,17 +34,21 @@ def validate_username(username: str) -> str:
 
 
 #check_strength=True only at registration, not at login
-def validate_password(password: str, check_strength: bool = False) -> str:
-    if not isinstance(password, str) or not password:
+def validate_password(password, check_strength: bool = False):
+    if isinstance(password, str):
+        size = chars = len(password)
+    elif isinstance(password, (bytes, bytearray)):
+        size = len(password)
+        chars = sum(1 for b in password if (b & 0xC0) != 0x80)
+    else:
         raise ValidationError("invalid password")
-    if len(password) > MAX_PASSWORD_LEN:
+    if not size or chars > MAX_PASSWORD_LEN or size > 4 * MAX_PASSWORD_LEN:
         raise ValidationError("invalid password")
-    if check_strength and len(password) < MIN_PASSWORD_LEN:
+    if check_strength and chars < MIN_PASSWORD_LEN:
         raise ValidationError(
             f"password must be at least {MIN_PASSWORD_LEN} characters"
         )
     return password
-
 
 def validate_source_path(raw: str) -> Path:
     _check_raw_path(raw)
