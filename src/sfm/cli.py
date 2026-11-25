@@ -52,6 +52,9 @@ def cmd_register(args) -> int:
     print(f"User '{username}' created.")
     return 0
 
+def _printable(text: str) -> str:
+    return "".join(c if c.isprintable() else f"\\x{ord(c):02x}" for c in text)
+
 def cmd_encrypt(args) -> int:
     with _session(args) as (username, kek):
         file_id = vault.encrypt_file(username, kek, args.path)
@@ -74,7 +77,7 @@ def cmd_list(args) -> int:
         return 0
     print(f"{'ID':>4}  NAME")
     for file_id, name in files:
-        print(f"{file_id:>4}  {name}")
+        print(f"{file_id:>4}  {_printable(name)}")
     return 0
 
 def cmd_delete(args) -> int:

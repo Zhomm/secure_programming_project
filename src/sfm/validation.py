@@ -1,9 +1,10 @@
 """ input validation for paths and command arguments."""
-
+import os
 import re
 from pathlib import Path
 
 MAX_PATH_LEN = 4096
+MAX_NAME_LEN = 255
 MAX_FILE_SIZE = 100 * 1024 * 1024      
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
 MIN_PASSWORD_LEN = 8
@@ -14,16 +15,17 @@ class ValidationError(Exception):
     """Raised when an input is rejected (generic message)."""
 
 
+def _has_control_chars(text: str) -> bool:
+    return any(ord(c) < 32 or ord(c) == 127 for c in text)
+
+
 def _check_raw_path(raw: str) -> None:
     if not isinstance(raw, str) or not raw:
         raise ValidationError("invalid path")
-    
-    #exclude input as safe.txt\x00../../etc/passwd
-    if "\x00" in raw:
+    if _has_control_chars(raw):
         raise ValidationError("invalid path")
     if len(raw) > MAX_PATH_LEN:
         raise ValidationError("invalid path")
-
 
 def validate_username(username: str) -> str:
     if not isinstance(username, str) or not USERNAME_RE.fullmatch(username):
@@ -52,22 +54,30 @@ def validate_password(password, check_strength: bool = False):
 
 def validate_source_path(raw: str) -> Path:
     _check_raw_path(raw)
+    candidate = Path(raw).expanduser()
     try:
-        path = Path(raw).expanduser().resolve(strict=True)
+        is_link = candidate.is_symlink()
+        path = candidate.resolve(strict=True)
     except (OSError, RuntimeError):
         raise ValidationError("invalid path")
+    if is_link:
+        raise ValidationError("symbolic links are not accepted")
 
+    if _has_control_chars(path.name):
+        raise ValidationError("invalid path")
     if not path.is_file():
         raise ValidationError("not a regular file")
     if path.stat().st_size > MAX_FILE_SIZE:
         raise ValidationError("file too large")
     return path
 
-
 def validate_dest_path(raw: str, force: bool = False) -> Path:
     _check_raw_path(raw)
     candidate = Path(raw).expanduser()
     if candidate.name in ("", ".", ".."):
+        raise ValidationError("invalid path")
+
+    if len(os.fsencode(candidate.name)) > MAX_NAME_LEN:
         raise ValidationError("invalid path")
 
     try:
@@ -76,8 +86,12 @@ def validate_dest_path(raw: str, force: bool = False) -> Path:
         raise ValidationError("invalid path")
     if not parent.is_dir():
         raise ValidationError("invalid path")
-
+    
     dest = parent / candidate.name
-    if (dest.exists() or dest.is_symlink()) and not force:
+    try:
+        taken = dest.exists() or dest.is_symlink()
+    except OSError:                       # e.g. file name too long
+        raise ValidationError("invalid path")
+    if taken and not force:
         raise ValidationError("destination already exists (use --force)")
     return dest

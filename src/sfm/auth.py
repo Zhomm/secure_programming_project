@@ -11,6 +11,7 @@ from . import log, storage
 
 SALT_SIZE = 16    
 ROOT_KEY_SIZE = 32
+_DUMMY_SALT = bytes(SALT_SIZE)   # used only to spend the same time for unknown users
 
 # Argon2id cost parameters 
 ARGON2_TIME_COST = 4
@@ -84,8 +85,10 @@ def login(username: str, password: str) -> bytearray:
         conn.close()
 
     if row is None:
+        dummy_root = _derive_root_key(password, _DUMMY_SALT)
+        hmac.compare_digest(_derive(dummy_root, info=b"sfm-auth-verifier"), bytes(32))
         log.event("login_failed", level="warning", user=username, reason="unknown_user")
-        raise AuthError("invalid username or password") 
+        raise AuthError("invalid username or password")
 
     salt, stored_verifier = row
     root_key = _derive_root_key(password, salt)
