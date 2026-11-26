@@ -77,6 +77,8 @@ def event(name: str, level: str = "info", **fields) -> None:
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "level": level,
             "event": name,
+            "outcome": "success" if level == "info" else "failure",
+            "source": f"local:uid={os.getuid()}",
             "pid": os.getpid(),
         }
         for key, value in fields.items():
