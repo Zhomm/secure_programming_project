@@ -7,7 +7,7 @@ from argon2.low_level import Type, hash_secret_raw
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 
-from . import log, storage
+from . import log, secmem, storage, vault
 
 SALT_SIZE = 16    
 ROOT_KEY_SIZE = 32
@@ -44,18 +44,21 @@ def _derive(root_key: bytes, info: bytes, length: int = 32) -> bytes:
     hkdf = HKDF(algorithm=hashes.SHA256(), length=length, salt=None, info=info)
     return hkdf.derive(root_key)
 
+def _open_db() -> sqlite3.Connection:
+    try:
+        return storage.open_users_db()
+    except storage.StorageError:
+        log.event("integrity_error", level="error", reason="users database damaged")
+        raise AuthError("user database is damaged")
+
 #create root_key and the relative verifier (used for login) and save into database
 #if successfull create also the user vault dir
-def register(username: str, password: str) -> None:
-    storage.init_users_db()
-    db_path = storage.get_users_db_path()
-
-    salt = os.urandom(SALT_SIZE)
-    root_key = _derive_root_key(password, salt)
-    verifier = _derive(root_key, info=b"sfm-auth-verifier")
-
-    conn = sqlite3.connect(db_path)
+def register(username: str, password) -> None:
+    conn = _open_db()
     try:
+        salt = os.urandom(SALT_SIZE)
+        root_key = _derive_root_key(password, salt)
+        verifier = _derive(root_key, info=b"sfm-auth-verifier")
         try:
             conn.execute(
                 "INSERT INTO users (username, salt, verifier) VALUES (?, ?, ?)",
@@ -65,22 +68,32 @@ def register(username: str, password: str) -> None:
         except sqlite3.IntegrityError:
             log.event("register_failed", level="warning", user=username, reason="exists")
             raise AuthError("registration failed")  # generic
+        except sqlite3.Error:
+            log.event("integrity_error", level="error", reason="users database damaged")
+            raise AuthError("user database is damaged")
     finally:
         conn.close()
 
+    # The index exists from day one, so a missing index.enc is always an anomaly
     storage.get_user_dir(username)
+    kek = bytearray(_derive(root_key, info=b"sfm-index-kek"))
+    try:
+        vault.init_index(username, kek)
+    finally:
+        secmem.wipe(kek)
     log.event("register_ok", user=username)
 
 #retrieve verifier (if user exists)
-def login(username: str, password: str) -> bytearray:
-    storage.init_users_db()
-    db_path = storage.get_users_db_path()
-    conn = sqlite3.connect(db_path)
+def login(username: str, password) -> bytearray:
+    conn = _open_db()
     try:
         row = conn.execute(
             "SELECT salt, verifier FROM users WHERE username = ?",
             (username,),
         ).fetchone()
+    except sqlite3.Error:
+        log.event("integrity_error", level="error", reason="users database damaged")
+        raise AuthError("user database is damaged")
     finally:
         conn.close()
 

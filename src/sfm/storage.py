@@ -21,25 +21,45 @@ def ensure_base_dir() -> Path:
 def get_users_db_path() -> Path:
     return ensure_base_dir() / "users.db"
 
+class StorageError(Exception):
+    """A storage file is damaged or has been tampered with (no internal details)."""
+
 #Create the users table if it does not exist yet.
 def init_users_db() -> None:
     db_path = get_users_db_path()
-    conn = sqlite3.connect(db_path)
     try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                username   TEXT PRIMARY KEY,
-                salt       BLOB NOT NULL,
-                verifier   BLOB NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    username   TEXT PRIMARY KEY,
+                    salt       BLOB NOT NULL,
+                    verifier   BLOB NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """
             )
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        raise StorageError("user database damaged")
     os.chmod(db_path, 0o600)
+
+
+def open_users_db() -> sqlite3.Connection:
+    init_users_db()
+    conn = None
+    try:
+        conn = sqlite3.connect(get_users_db_path())
+        if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise sqlite3.DatabaseError("quick_check failed")
+        return conn
+    except sqlite3.Error:
+        if conn is not None:
+            conn.close()
+        raise StorageError("user database damaged")
 
 class AccessError(Exception):
     """Custom error"""
@@ -84,6 +104,9 @@ def get_blobs_dir(username: str) -> Path:
 
 def get_index_path(username: str) -> Path:
     return get_user_dir(username) / "index.enc"
+
+def has_blobs(username: str) -> bool:
+    return any(p.suffix == ".bin" for p in get_blobs_dir(username).iterdir())
 
 #return the encrypted raw index.enc
 def read_index_blob(username: str) -> bytes | None:

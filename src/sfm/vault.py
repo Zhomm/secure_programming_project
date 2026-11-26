@@ -47,13 +47,22 @@ def _blob_path(username: str, record: dict):
 def _load_index(username: str, kek: bytes) -> list[dict]:
     blob = storage.read_index_blob(username)
     if blob is None:
+        if storage.has_blobs(username):
+            log.event("integrity_error", level="error", user=username, reason="index missing")
+            raise VaultError("vault index is missing or damaged")
         return []
     try:
         plain = crypto.decrypt_bytes(kek, blob, _index_aad(username))
     except crypto.DecryptionError:
+        log.event("integrity_error", level="error", user=username,
+                  reason="index authentication failed")
         raise VaultError("cannot open vault")
     return json.loads(plain)
 
+
+def init_index(username: str, kek: bytes) -> None:
+    """Create the empty encrypted index for a new user (called by register)."""
+    _save_index(username, kek, [])
 
 def _save_index(username: str, kek: bytes, records: list[dict]) -> None:
     plain = json.dumps(records).encode()
@@ -180,7 +189,13 @@ def decrypt_file(username: str, kek: bytes, file_id: int,
         dek = bytearray(crypto.decrypt_bytes(kek, wrapped_dek, _dek_aad(username, file_id)))
         blob = blob_path.read_bytes()
         plaintext = crypto.decrypt_bytes(dek, blob, _blob_aad(username, file_id))
-    except (crypto.DecryptionError, OSError):
+    except crypto.DecryptionError:
+        log.event("integrity_error", level="error", user=username, file_id=file_id,
+                  reason="file authentication failed")
+        raise VaultError("file is corrupted or has been modified")
+    except OSError:
+        log.event("integrity_error", level="error", user=username, file_id=file_id,
+                  reason="blob unreadable")
         raise VaultError("cannot decrypt file")
     finally:
         secmem.wipe(dek)
